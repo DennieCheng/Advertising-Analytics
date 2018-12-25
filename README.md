@@ -14,7 +14,7 @@ sp;
 car;
 MASS
 
-# Other tools
+# Other tools assited analyzing
 Tableau
 
 # Prediction Model
