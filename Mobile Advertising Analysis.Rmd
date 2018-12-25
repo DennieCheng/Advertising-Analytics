@@ -1,0 +1,202 @@
+---
+title: "Mobile Advertising Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(aspace)
+library(dplyr)
+library(corrgram)
+library(pastecs)
+
+library(ggplot2)
+library(ggmap)
+library(maptools)
+library(maps)
+library(sp)
+library(car)
+library(MASS)
+```
+
+```{r}
+Geo_fence <- data.frame(read.csv("/Users/NINI/Desktop/Master Degree of Business Analytics/Courses/277 Customer and Social Analytics/Assignment - 4 mobile analytics/Geo-Fence Analytics.csv"))
+attach(Geo_fence)
+```
+Create variable "imp_large", "cat_entertainment", "cat_social", "cat_tech", "os_ios"
+```{r}
+Geo_fence$imp_large = ifelse(imp_size == "728x90", 1, 0)
+Geo_fence$cat_entertainment = ifelse(app_topcat == "IAB1" | app_topcat == "IAB1-6", 1, 0)
+Geo_fence$cat_social = ifelse(app_topcat == "IAB14", 1, 0)
+Geo_fence$cat_tech = ifelse(app_topcat == "IAB19-6", 1, 0)
+Geo_fence$os_ios = ifelse(device_os == "iOS", 1, 0)
+```
+Create "distance"
+```{r}
+Geo_fence$distance = 6371 * acos(cos(as_radians(device_lat)) * cos(as_radians(geofence_lat)) 
+                                 * cos(as_radians(device_lon) - as_radians(geofence_lon)) 
+                                 + sin(as_radians(device_lat)) * sin(as_radians(geofence_lat)))
+
+detach(Geo_fence)
+attach(Geo_fence)
+```
+Create distance group and calculate click-through-rate
+```{r}
+Geo_fence$distance_group = ifelse(between(distance, 0, 0.5), 1, 
+                                         ifelse(between(distance, 0.5, 1), 2, 
+                                                ifelse(between(distance, 1, 2), 3, 
+                                                       ifelse(between(distance, 2, 4), 4, 
+                                                              ifelse(between(distance, 4, 7), 5,
+                                                                     ifelse(between(distance, 7, 10), 6, 
+                                                                            ifelse(distance >10, 7, NA)))))))
+
+Geo_fence <- Geo_fence%>%group_by(distance_group)%>%
+  mutate(click_through_rate = mean(didclick))
+detach(Geo_fence)
+attach(Geo_fence)
+```
+Create variables "distance_squared", "ln_app_review_vol"
+```{r}
+Geo_fence$ln_app_review_vol = log(app_review_vol, base = exp(1))
+Geo_fence$distance_squared = distance^2
+detach(Geo_fence)
+attach(Geo_fence)
+```
+Summary of variables: didclick, distance, imp_large, cat_entertainment, cat_social, cat_tech, os_ios, ln_app_review_vol and app_review_val.
+```{r}
+vars <- c("didclick", "distance", "imp_large", "cat_entertainment", "cat_social", "cat_tech", "os_ios", "ln_app_review_vol", "app_review_val")
+format(stat.desc(Geo_fence[vars]), scientific = F)
+
+par(mfrow=c(1,1))
+boxplot(didclick, distance, imp_large, cat_entertainment, cat_social, cat_tech, 
+        os_ios, ln_app_review_vol, app_review_val, main = "Distribution", 
+        names = c("click", "Dst", "imp", "ent", "social", "tech", "ios", "vol", "val"))
+
+```
+Correlations among the above variables (for drawing out correlationship easily, extract a table only containing above variables from Geo_fence)
+```{r}
+cor_geofence <- subset(Geo_fence, select = c(didclick, distance, imp_large, cat_entertainment, cat_social, cat_tech, os_ios, ln_app_review_vol, app_review_val))
+cor(cor_geofence)
+corrgram(cor_geofence, order = TRUE, lower.panel = panel.shade,
+         upper.panel = panel.pie, text.panel = panel.txt,
+         main = "Corrgram of Geo-fense intercorrelations")
+```
+
+Plot the relationship of distance (x-axis) and click-through-rate (y-axis)
+According to scatterplot，we found that the closer mobile device to geofence, the higher the click-through-rate.
+But, when the distance is increasing from 4km to 10km, the click-throught-rate is also increasing. If the distance is larger than 10km, then the click-through-rate is reaching to 0.
+```{r}
+scatterplot(click_through_rate ~ distance, xlab = "distance(km)", 
+     ylab = "click_through_rate", main = "Relationship(Distance-ClickThroughRate)")
+```
+Next, I will dive deep into the geofence of advertising. From the map, it shows the two campains was hosted at California and Illinois.
+```{r}
+mp<-NULL
+mapstates<-borders("state",colour = "gray50",fill="white") 
+mp<-ggplot()+mapstates
+visit.x<-Geo_fence$geofence_lon
+visit.y<-Geo_fence$geofence_lat
+mp2<-mp+geom_point(aes(x=visit.x,y=visit.y,size = Geo_fence$gepfence_radius*0.1),
+                   color=Geo_fence$gepfence_radius)+scale_size(range=c(1,1))
+mp3<-mp2+theme(legend.position = "none") 
+mp3
+```
+Exploring detail via Tableau (See Appendix).
+One campain held in Southern California is in Orange County and the radius of every geofence is 11.263km, and every geofence has at least one neighbor geofence within 10km.
+The other campain held in Illinois is in Dupage County and Cook County and the radius of every geofence is 5km, and half geofence have at least one neighbor geofence within 5km.
+So, we can know the click-throught-rate increasing when distance increasing from 4 to 10 is due to the mobile device is entering another geofence when leaving a geofence.
+
+logistic regression on dependent variable "didclick" and related independent variables
+```{r}
+fit.didclick <- glm(didclick ~ distance + imp_large + cat_entertainment
+                    + cat_social + cat_tech + os_ios + ln_app_review_vol + app_review_val,
+                    data = Geo_fence, family = binomial())
+
+summary(fit.didclick)
+
+fit.didclick_dsq <- glm(didclick ~ distance + distance_squared + imp_large + cat_entertainment
+                      + cat_social + cat_tech + os_ios + ln_app_review_vol + app_review_val,
+                    data = Geo_fence, family = binomial())
+
+summary(fit.didclick_dsq)
+```
+Compare two models, the model "fit.didclick_dsq" with squared distance has better performance. 
+It means "didclick" and "distance" has quadratic relationship.
+```{r}
+anova(fit.didclick, fit.didclick_dsq, test="Chisq")
+```
+re-do logistic regression with removing variables which are not significantly impacting 'didclick'.
+```{r}
+fit.didclick_reduce <- glm(didclick ~ distance + distance_squared + imp_large 
+                     + cat_tech + os_ios,
+                     data = Geo_fence, family = binomial())
+summary(fit.didclick_reduce)
+```
+The reduced model's performance has not significant difference from the original model "fit.didclick_dsq"
+But fit.didclick_reduce has smaller AIC, which means it's a better model than fit.didclick_dsq
+```{r}
+anova(fit.didclick_reduce, fit.didclick_dsq, test="Chisq")
+```
+Next, will check whether the model fits well.
+Using stepwise method to check if any variable could be removed for better model, and, the result shows delete any one variable of this model would decrease the performance.
+```{r}
+stepAIC(fit.didclick_reduce, direction = "backward")
+```
+no outliers. 
+```{r}
+outlierTest(fit.didclick_reduce) 
+```
+below ratio is smaller than 1, so no overdispension
+```{r}
+deviance(fit.didclick_reduce)/df.residual(fit.didclick_reduce)
+```
+chi-squared test's p-value is tiny, which shows this model is good.
+```{r}
+with(fit.didclick_reduce, pchisq(null.deviance-deviance, df.null-df.residual, lower.tail=FALSE))
+```
+So, this model fits very well.
+
+interprate coefficients:
+```{r}
+co_efficient <-coef(fit.didclick_reduce)
+co_efficient <- as.data.frame(co_efficient)
+colnames(co_efficient) <- c("coef_value")
+co_efficient$coef_value <- round(co_efficient$coef_value, 4)
+```
+get odds
+```{r}
+co_efficient$odds <- round(exp(co_efficient$coef_value), 4)
+co_efficient
+```
+Predict 'didclick' probability when distance from 0km to 5km and keep other variables constant.
+(use mean value of imp_large = 0, mean value of cat_tech = 1, mean value of os_ios = 0)
+```{r}
+round(mean(Geo_fence$cat_tech), 0)
+round(mean(Geo_fence$imp_large), 0)
+round(mean(Geo_fence$os_ios), 0)
+newdata_dist <- data.frame(distance = c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15), distance_squared = 0, imp_large = 0, cat_tech = 1, os_ios = 0)
+
+newdata_dist$prob <- predict(fit.didclick_reduce, newdata_dist, type = "response")
+newdata_dist
+
+# Predict 'didclick' probability when imp_large changes to '1' and keep othe rvariable constant.
+# Use mean value of distance, mean value of cat_tech = 1, mean value of os_ios = 0
+round(mean(Geo_fence$distance), 4)
+newdata_imp <- data.frame(distance = 2.9837, distance_squared = 2.9837^2, imp_large = c(0, 1), cat_tech = 1, os_ios = 0)
+
+newdata_imp$prob <- predict(fit.didclick_reduce, newdata_imp, type = "response")
+newdata_imp
+
+# Predict 'didclick' probability when cat_tech changes to '1' and keep othe rvariable constant.
+# Use mean value of distance, mean value of imp_large = 1, mean value of os_ios = 0
+newdata_cat <- data.frame(distance = 2.9837, distance_squared = 2.9837^2, imp_large = 0, cat_tech = c(0, 1), os_ios = 0)
+
+newdata_cat$prob <- predict(fit.didclick_reduce, newdata_cat, type = "response")
+newdata_cat
+
+# Predict 'didclick' probability when os_ios changes to '1' and keep othe rvariable constant.
+# Use mean value of distance, mean value of cat_tech = 1, mean value of imp_large = 0
+newdata_ios <- data.frame(distance = 2.9837, distance_squared = 2.9837^2, imp_large = 0, cat_tech = 1, os_ios = c(0, 1))
+
+newdata_ios$prob <- predict(fit.didclick_reduce, newdata_ios, type = "response")
+newdata_ios
+```
